@@ -1,3 +1,4 @@
+php
 <?php
 
 /**
@@ -172,7 +173,14 @@ if (! class_exists('BP_Get_Cars')) {
 
         public function is_duplicate($guid)
         {
-            $duplicate = new WP_Query(['post_type' => BP_GET_CARS_POST_TYPE, 'meta_key' => 'uid', 'meta_value' => $guid]);
+            $duplicate = new WP_Query([
+                'post_type'      => BP_GET_CARS_POST_TYPE,
+                'meta_key'       => 'uid',
+                'meta_value'     => sanitize_text_field($guid),
+                'posts_per_page' => 1,
+                'fields'         => 'ids',        // only need IDs
+                'no_found_rows'  => true          // skip COUNT(*)
+            ]);
             $post = end($duplicate->posts);
             return $duplicate->post_count > 0 ? $post->ID : false;
         }
@@ -189,11 +197,15 @@ if (! class_exists('BP_Get_Cars')) {
 
         public function create_listing($car)
         {
+            $author_id = get_current_user_id();
+            if (!$author_id) {
+                $author_id = get_option('bp_get_cars_default_author', 1);
+            }
             $postarg = [
                 'post_type'   => BP_GET_CARS_POST_TYPE,
                 'post_title'  => sanitize_text_field($car->title),
                 'post_status' => 'publish',
-                'post_author' => 1,
+                'post_author' => $author_id,
                 'guid'        => $car->guid,
                 'meta_input'  => [
                     'uid'                      => sanitize_text_field($car->guid),
@@ -207,10 +219,19 @@ if (! class_exists('BP_Get_Cars')) {
                 return false;
             }
             $this->update_details($postid, $car->details);
-            wp_set_object_terms($postid, $car->features, 'vehica_6670');
-            wp_set_object_terms($postid, 'Begagnad', 'vehica_6654');
+            $result = wp_set_object_terms($postid, $car->features, 'vehica_6670');
+            if (is_wp_error($result)) {
+                $this->logger->log_error('Fel vid tilldelning av features: ' . $result->get_error_message());
+            }
+            $result = wp_set_object_terms($postid, 'Begagnad', 'vehica_6654');
+            if (is_wp_error($result)) {
+                $this->logger->log_error('Fel vid tilldelning av status: ' . $result->get_error_message());
+            }
             if (! empty($car->additional['Färg'])) {
-                wp_set_object_terms($postid, sanitize_text_field($car->additional['Färg']), 'vehica_6666');
+                $result = wp_set_object_terms($postid, sanitize_text_field($car->additional['Färg']), 'vehica_6666');
+                if (is_wp_error($result)) {
+                    $this->logger->log_error('Fel vid tilldelning av färg: ' . $result->get_error_message());
+                }
             }
             $gids = $this->upload_images($car->images, $postid, $car->title);
             if (! empty($gids) && count($gids) > 1) {
@@ -255,6 +276,10 @@ if (! class_exists('BP_Get_Cars')) {
                     'tmp_name' => $tmp
                 ];
                 $attachid = media_handle_sideload($attachment, $postid, $title);
+                // Delete the temporary file after use
+                if (file_exists($tmp) && ! unlink($tmp)) {
+                    $this->logger->log_error('Kunde inte ta bort temporär bildfil: ' . $tmp);
+                }
                 if (is_wp_error($attachid)) {
                     $this->logger->log_error("Fel vid uppladdning av bild $filename: " . $attachid->get_error_message());
                     continue;

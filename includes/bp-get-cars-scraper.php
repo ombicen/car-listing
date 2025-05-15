@@ -1,9 +1,17 @@
+php
 <?php
 // Scraper logic for bp Get Cars plugin
 class BP_Get_Cars_Scraper
 {
     public $error_log_file;
     private $main;
+
+    // Centralized logging method
+    private function log($message)
+    {
+        $this->main->logger->log_error('[BP_Get_Cars_Scraper] ' . $message);
+    }
+
     public function __construct($main_instance)
     {
         $this->main = $main_instance;
@@ -14,50 +22,50 @@ class BP_Get_Cars_Scraper
     // Batch import with session ID to avoid collisions between parallel imports
     public function update_car_listing_batch($offset, $limit, $args = [], $session_id = null)
     {
-        $this->main->logger->log_error('DEBUG: Initiated update_car_listing_batch with offset=' . $offset . ', limit=' . $limit . ', session_id=' . ($session_id ?: 'none'));
+        $this->log('DEBUG: Initiated update_car_listing_batch with offset=' . $offset . ', limit=' . $limit . ', session_id=' . ($session_id ?: 'none'));
         include_once(dirname(__FILE__) . '/simple_html_dom.php');
-        $baseUrl = get_option('bp_get_cars_baseurl', 'https://www.bytbil.com');
+        $baseUrl = filter_var(get_option('bp_get_cars_baseurl', 'https://www.bytbil.com'), FILTER_VALIDATE_URL) ?: 'https://www.bytbil.com';
         $storePath = get_option('bp_get_cars_store', '/handlare/ekenbil-ab-9951');
         $store = $baseUrl . $storePath;
         $mainBaseUrl = $baseUrl;
-        $selector_car_links = get_option('bp_get_cars_selector_car_links', 'ul.result-list li .uk-width-1-1 .car-list-header a');
-        $selector_pagination = get_option('bp_get_cars_selector_pagination', 'div.pagination-container a.pagination-page');
+        $selector_car_links = sanitize_text_field(get_option('bp_get_cars_selector_car_links', 'ul.result-list li .uk-width-1-1 .car-list-header a'));
+        $selector_pagination = sanitize_text_field(get_option('bp_get_cars_selector_pagination', 'div.pagination-container a.pagination-page'));
 
         // Generate or use session ID
         if (!$session_id) {
             $session_id = uniqid('bp_cars_', true);
-            $this->main->logger->log_error('DEBUG: Generated new session_id: ' . $session_id);
+            $this->log('DEBUG: Generated new session_id: ' . $session_id);
         }
         $transient_key = 'bp_get_cars_links_' . $session_id;
         $all_links = get_transient($transient_key);
         if ($all_links === false) {
-            $this->main->logger->log_error('DEBUG: No cached links for session, scraping store page: ' . $store);
+            $this->log('DEBUG: No cached links for session, scraping store page: ' . $store);
             $html = file_get_html($store);
             if (! $html) {
-                $this->main->logger->log_error("Kunde inte hämta HTML från $store");
+                $this->log("Kunde inte hämta HTML från $store");
                 return ['error' => 'Kunde inte hämta HTML från bilhandlaren.'];
             }
             $pages = $html->find($selector_pagination);
             $pagesnr = max(1, count($pages));
-            $this->main->logger->log_error('DEBUG: Found ' . $pagesnr . ' pages.');
+            $this->log('DEBUG: Found ' . $pagesnr . ' pages.');
             $all_links = [];
             for ($l = 1; $l <= $pagesnr; $l++) {
                 $page_url = $l === 1 ? $store : ($store . '?Page=' . $l);
-                $this->main->logger->log_error('DEBUG: Fetching page ' . $l . ': ' . $page_url);
+                $this->log('DEBUG: Fetching page ' . $l . ': ' . $page_url);
                 $page_html = $l === 1 ? $html : @file_get_html($page_url);
                 $links = $page_html->find($selector_car_links);
-                $this->main->logger->log_error('DEBUG: Found ' . count($links) . ' car links on page ' . $l);
+                $this->log('DEBUG: Found ' . count($links) . ' car links on page ' . $l);
                 foreach ($links as $carLink) {
                     $all_links[] = $carLink->href;
                 }
             }
             set_transient($transient_key, $all_links, 60 * 30); // Cache for 30 minutes
-            $this->main->logger->log_error('DEBUG: Cached car links for session_id: ' . $session_id);
+            $this->log('DEBUG: Cached car links for session_id: ' . $session_id);
         } else {
-            $this->main->logger->log_error('DEBUG: Loaded cached car links for session_id: ' . $session_id . ' (count: ' . count($all_links) . ')');
+            $this->log('DEBUG: Loaded cached car links for session_id: ' . $session_id . ' (count: ' . count($all_links) . ')');
         }
         $batch = array_slice($all_links, $offset, $limit);
-        $this->main->logger->log_error('DEBUG: Processing batch: offset=' . $offset . ', limit=' . $limit . ', batch count=' . count($batch));
+        $this->log('DEBUG: Processing batch: offset=' . $offset . ', limit=' . $limit . ', batch count=' . count($batch));
         $results = [];
         $map = [
             'Märke' => ['vehica_6659', 'taxonomy'],
@@ -69,7 +77,7 @@ class BP_Get_Cars_Scraper
             'Drivhjul' => ['vehica_6661', 'taxonomy'],
             'Regnr' => ['vehica_6671', 'text']
         ];
-        $skip_existing = isset($args['skip_existing']) ? $args['skip_existing'] : false;
+        $skip_existing = isset($args['skip_existing']) ? (bool)$args['skip_existing'] : false;
 
         // Track all processed IDs in the session
         $ids_transient_key = 'bp_get_cars_ids_' . $session_id;
@@ -83,31 +91,28 @@ class BP_Get_Cars_Scraper
         $temporarily_failed_ids = [];
 
         foreach ($batch as $carHref) {
-            $this->main->logger->log_error('DEBUG: Processing carHref: ' . $carHref);
+            $this->log('DEBUG: Processing carHref: ' . $carHref);
             if ($skip_existing && ($id = $this->main->is_duplicate($carHref)) !== false) {
-                $this->main->logger->log_error('DEBUG: Skipped existing car: ' . $carHref . ' (ID: ' . $id . ')');
+                $this->log('DEBUG: Skipped existing car: ' . $carHref . ' (ID: ' . $id . ')');
                 $results[] = ['guid' => $carHref, 'status' => 'skipped_existing', 'id' => $id];
                 if ($id) $all_processed_ids[] = $id;
                 continue;
             }
-            $this->main->logger->log_error('DEBUG: Fetching car details for: ' . $mainBaseUrl . $carHref);
+            $this->log('DEBUG: Fetching car details for: ' . $mainBaseUrl . $carHref);
             $carPage = false;
             $attempts = 0;
             while ($attempts <= $retry_count && ! $carPage) {
                 $carPage = @file_get_html($mainBaseUrl . $carHref);
                 if (! $carPage) {
-                    $this->main->logger->log_error("Kunde inte hämta detaljer för bil: $carHref (försök " . ($attempts + 1) . ")");
+                    $this->log("Kunde inte hämta detaljer för bil: $carHref (försök " . ($attempts + 1) . ")");
                     $attempts++;
                     if ($attempts <= $retry_count && $retry_delay > 0) sleep($retry_delay); // delay between retries
                 }
             }
             if (! $carPage) {
-                $this->main->logger->log_error("Permanent misslyckande att hämta detaljer för bil: $carHref efter $retry_count försök");
-                // If the car exists in WP, add its ID to temporarily_failed_ids so it is not deleted
+                $this->log("Permanent misslyckande att hämta detaljer för bil: $carHref efter $retry_count försök");
                 $id = $this->main->is_duplicate($carHref);
-                if ($id) {
-                    $temporarily_failed_ids[] = $id;
-                }
+                if ($id) $temporarily_failed_ids[] = $id;
                 $results[] = ['guid' => $carHref, 'status' => 'error', 'retries' => $retry_count];
                 continue;
             }
@@ -123,24 +128,24 @@ class BP_Get_Cars_Scraper
             $car->additional = $this->extract_additional($carPage);
             $car->images = $this->extract_images($carPage);
             $car->features = $this->extract_features($carPage);
-            $this->main->logger->log_error('DEBUG: Creating/updating listing for car: ' . $car->title);
+            $this->log('DEBUG: Creating/updating listing for car: ' . $car->title);
             if ($id = $this->main->create_listing($car)) {
-                $this->main->logger->log_error('DEBUG: Successfully created/updated car: ' . $car->title . ' (ID: ' . $id . ')');
+                $this->log('DEBUG: Successfully created/updated car: ' . $car->title . ' (ID: ' . $id . ')');
                 $results[] = ['guid' => $car->guid, 'status' => 'success', 'id' => $id];
                 $all_processed_ids[] = $id;
             } else {
-                $this->main->logger->log_error('DEBUG: Failed to create/update car: ' . $car->title);
+                $this->log('DEBUG: Failed to create/update car: ' . $car->title);
                 $results[] = ['guid' => $car->guid, 'status' => 'error'];
             }
         }
         // Save processed IDs for this session
         set_transient($ids_transient_key, $all_processed_ids, 60 * 30);
         $has_more = ($offset + $limit) < count($all_links);
-        $this->main->logger->log_error('DEBUG: Batch complete. has_more=' . ($has_more ? 'true' : 'false') . ', next_offset=' . ($offset + $limit));
+        $this->log('DEBUG: Batch complete. has_more=' . ($has_more ? 'true' : 'false') . ', next_offset=' . ($offset + $limit));
         // Clean up transients if this was the last batch
         if (! $has_more) {
             delete_transient($transient_key);
-            $this->main->logger->log_error('DEBUG: Deleted transient for session_id: ' . $session_id);
+            $this->log('DEBUG: Deleted transient for session_id: ' . $session_id);
             // Return all processed IDs for cleanup, including temporarily failed
             $all_ids_final = array_unique(array_merge($all_processed_ids, $temporarily_failed_ids));
             delete_transient($ids_transient_key);
@@ -167,10 +172,12 @@ class BP_Get_Cars_Scraper
         $details = (object) [];
         $detailsHtml = $carPage->find('div.vehicle-detail-headline .object-info-box dl div');
         foreach ($detailsHtml as $carFeature) {
-            $keyFeature = $carFeature->find('dt', 0)->plaintext;
+            $dtNode = $carFeature->find('dt', 0);
+            $ddNode = $carFeature->find('dd', 0);
+            $keyFeature = $dtNode ? $dtNode->plaintext : '';
             $featureKey = $map[$keyFeature] ?? null;
-            if ($featureKey) {
-                $value = $this->main->clean_number($carFeature->find('dd', 0)->plaintext);
+            if ($featureKey && $ddNode) {
+                $value = $this->main->clean_number($ddNode->plaintext);
                 $details->{$featureKey[0]} = [$value, $featureKey[1]];
             }
         }
@@ -182,7 +189,8 @@ class BP_Get_Cars_Scraper
         $additional = [];
         $key = $value = '';
         $u = 1;
-        foreach ($carPage->find('.vehicle-detail-additional-detail > .additional-vehicle-data > ul > li > div') as $carDetails) {
+        $carDetailsNodes = $carPage->find('.vehicle-detail-additional-detail > .additional-vehicle-data > ul > li > div');
+        foreach ($carDetailsNodes as $carDetails) {
             if ($u % 2 == 0) {
                 $value = $this->main->clean_text($carDetails->plaintext);
                 $additional[$key] = $value;
@@ -197,7 +205,8 @@ class BP_Get_Cars_Scraper
     public function extract_images($carPage)
     {
         $images = [];
-        foreach ($carPage->find('div.main-slideshow-container > ul.uk-slideshow > li') as $carImages) {
+        $carImagesNodes = $carPage->find('div.main-slideshow-container > ul.uk-slideshow > li');
+        foreach ($carImagesNodes as $carImages) {
             $src = $carImages->{'data-src'} ?? '';
             if (! empty($src)) {
                 $images[] = (string) $src;
@@ -209,7 +218,8 @@ class BP_Get_Cars_Scraper
     public function extract_features($carPage)
     {
         $features = [];
-        foreach ($carPage->find('div.vehicle-detail-equipment-detail .equipment-box ul li') as $equipment) {
+        $equipmentNodes = $carPage->find('div.vehicle-detail-equipment-detail .equipment-box ul li');
+        foreach ($equipmentNodes as $equipment) {
             $features[] = $this->main->clean_text($equipment->plaintext);
         }
         return $features;
