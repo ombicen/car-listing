@@ -1,4 +1,3 @@
-php
 <?php
 // Scraper logic for bp Get Cars plugin
 class BP_Get_Cars_Scraper
