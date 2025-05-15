@@ -40,13 +40,24 @@ if (! class_exists('BP_Get_Cars')) {
             add_action('admin_enqueue_scripts', [$this, 'admin_enqueue_scripts']);
             add_action('wp_ajax_bp_get_cars_update', [$this, 'ajax_update_car_listing']);
             add_action('wp_ajax_bp_get_cars_update_batch', [$this, 'ajax_update_car_listing']);
+            add_filter('cron_schedules', [$this, 'add_cron_interval']);
         }
 
         public function schedule_daily_update()
         {
             if (! wp_next_scheduled('bp_get_cars_update_event')) {
-                wp_schedule_event(time(), apply_filters('bp_get_cars_cron_schedule', 'twicedaily'), 'bp_get_cars_update_event');
+                wp_schedule_event(time(), 'every_2_hours', 'bp_get_cars_update_event');
             }
+        }
+
+        // Register custom interval for every 2 hours
+        public function add_cron_interval($schedules)
+        {
+            $schedules['every_2_hours'] = [
+                'interval' => 2 * HOUR_IN_SECONDS,
+                'display'  => esc_html__('Every 2 Hours')
+            ];
+            return $schedules;
         }
 
         public function clear_daily_update()
@@ -362,7 +373,7 @@ if (! class_exists('BP_Get_Cars')) {
             $session_id = uniqid('bp_cars_cron_', true);
             $all_ids = [];
             do {
-                $result = $this->scraper->update_car_listing_batch($offset, $limit, ['skip_existing' => false], $session_id);
+                $result = $this->scraper->update_car_listing_batch($offset, $limit, ['skip_existing' => true], $session_id);
                 if (isset($result['results'])) {
                     foreach ($result['results'] as $item) {
                         if (!empty($item['id'])) {
@@ -375,7 +386,7 @@ if (! class_exists('BP_Get_Cars')) {
                 if (isset($result['all_ids']) && is_array($result['all_ids'])) {
                     $all_ids = $result['all_ids'];
                 }
-            } while (!empty($result['has_more']) && $result['has_more']);
+            } while (isset($result['has_more']) && $result['has_more']);
             // Clean up outdated posts
             $this->clean_outdated($all_ids);
             $this->logger->log_error('Cron batch update finished');
