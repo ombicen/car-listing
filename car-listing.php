@@ -84,7 +84,7 @@ if (! class_exists('BP_Get_Cars')) {
             ]);
             register_setting('bp_get_cars_settings_group', 'bp_get_cars_store', [
                 'type' => 'string',
-                'sanitize_callback' => 'sanitize_text_field',
+                'sanitize_callback' => 'esc_url_raw',
                 'default' => '/handlare/ekenbil-ab-9951',
             ]);
             register_setting('bp_get_cars_settings_group', 'bp_get_cars_selector_car_links', [
@@ -153,6 +153,9 @@ if (! class_exists('BP_Get_Cars')) {
 
         public function clean_outdated($uuids)
         {
+            if (empty($uuids) || !is_array($uuids)) {
+                return esc_html__('Inga inlägg att ta bort som är inaktuella.', 'bp-get-cars');
+            }
             $args = [
                 'post_type'   => BP_GET_CARS_POST_TYPE,
                 'numberposts' => -1,
@@ -162,10 +165,13 @@ if (! class_exists('BP_Get_Cars')) {
             $posts_to_delete = get_posts($args);
             if (! empty($posts_to_delete)) {
                 foreach ($posts_to_delete as $post_id) {
+                    $this->logger->log_error('Tar bort inlägg med ID: ' . $post_id);
                     wp_delete_post($post_id, true);
                 }
+                $this->logger->log_error('Taggit bort ' . count($posts_to_delete) . ' inlägg som är inaktuella.');
                 return count($posts_to_delete) . esc_html__(' inlägg har tagits bort som är inaktuella.', 'bp-get-cars');
             } else {
+                $this->logger->log_error('Inga inlägg att ta bort som är inaktuella.');
                 return esc_html__('Inga inlägg att ta bort som är inaktuella.', 'bp-get-cars');
             }
         }
@@ -181,7 +187,7 @@ if (! class_exists('BP_Get_Cars')) {
                 'no_found_rows'  => true          // skip COUNT(*)
             ]);
             $post = end($duplicate->posts);
-            return $duplicate->post_count > 0 ? $post->ID : false;
+            return $duplicate->post_count > 0 ? $post : false;
         }
 
         public function success_message($title)
