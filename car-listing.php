@@ -1,0 +1,353 @@
+<?php
+
+/**
+ * Plugin Name:       Ekenbil Car Listing
+ * Plugin URI:        https://ekenbil.se/
+ * Description:       Professional car inventory management and listing plugin for WordPress. Easily import, update, and display car listings from external sources with advanced scraping, error logging, and admin configuration.
+ * Author:            Ekenbil AB
+ * Version:           1.0.0
+ * Author URI:        https://ekenbil.se/
+ * Text Domain:       bp-get-cars
+ */
+
+if (! defined('BP_GET_CARS_POST_TYPE')) {
+    define('BP_GET_CARS_POST_TYPE', 'vehica_car');
+}
+
+if (! class_exists('BP_Get_Cars')) {
+    class BP_Get_Cars
+    {
+        public $error_log_file;
+        public $logger;
+        public $scraper;
+
+        public function __construct()
+        {
+            $this->error_log_file = plugin_dir_path(__FILE__) . 'bp-get-cars-error.log';
+            require_once(plugin_dir_path(__FILE__) . 'includes/bp-get-cars-helpers.php');
+            require_once(plugin_dir_path(__FILE__) . 'includes/bp-get-cars-logger.php');
+            require_once(plugin_dir_path(__FILE__) . 'includes/bp-get-cars-scraper.php');
+            $this->logger = new BP_Get_Cars_Logger($this->error_log_file);
+            $this->scraper = new BP_Get_Cars_Scraper($this);
+            // Hooks
+            register_activation_hook(__FILE__, [$this, 'schedule_daily_update']);
+            register_deactivation_hook(__FILE__, [$this, 'clear_daily_update']);
+            add_action('bp_get_cars_update_event', [$this, 'run_cron_batch_update']);
+
+            add_action('admin_menu', [$this, 'admin_menu']);
+            add_action('admin_init', [$this, 'register_settings']);
+            add_action('admin_notices', [$this, 'update_notice']);
+            add_action('admin_enqueue_scripts', [$this, 'admin_enqueue_scripts']);
+            add_action('wp_ajax_bp_get_cars_update', [$this, 'ajax_update_car_listing']);
+            add_action('wp_ajax_bp_get_cars_update_batch', [$this, 'ajax_update_car_listing']);
+        }
+
+        public function schedule_daily_update()
+        {
+            if (! wp_next_scheduled('bp_get_cars_update_event')) {
+                wp_schedule_event(time(), apply_filters('bp_get_cars_cron_schedule', 'twicedaily'), 'bp_get_cars_update_event');
+            }
+        }
+
+        public function clear_daily_update()
+        {
+            wp_clear_scheduled_hook('bp_get_cars_update_event');
+        }
+
+
+        public function admin_menu()
+        {
+            add_submenu_page(
+                'edit.php?post_type=' . BP_GET_CARS_POST_TYPE,
+                esc_html__('Bil Listan Api', 'bp-get-cars'),
+                esc_html__('Uppdatera lista', 'bp-get-cars'),
+                'edit_posts',
+                'carlisting-api',
+                [$this, 'update_car_listing_page']
+            );
+            add_submenu_page(
+                'edit.php?post_type=' . BP_GET_CARS_POST_TYPE,
+                esc_html__('Car Listing Settings', 'bp-get-cars'),
+                esc_html__('Settings', 'bp-get-cars'),
+                'manage_options',
+                'carlisting-settings',
+                [$this, 'settings_page']
+            );
+        }
+
+        public function register_settings()
+        {
+            register_setting('bp_get_cars_settings_group', 'bp_get_cars_baseurl', [
+                'type' => 'string',
+                'sanitize_callback' => 'esc_url_raw',
+                'default' => 'https://www.bytbil.com',
+            ]);
+            register_setting('bp_get_cars_settings_group', 'bp_get_cars_store', [
+                'type' => 'string',
+                'sanitize_callback' => 'sanitize_text_field',
+                'default' => '/handlare/ekenbil-ab-9951',
+            ]);
+            register_setting('bp_get_cars_settings_group', 'bp_get_cars_selector_car_links', [
+                'type' => 'string',
+                'sanitize_callback' => 'sanitize_text_field',
+                'default' => 'ul.result-list li .uk-width-1-1 .car-list-header a',
+            ]);
+            register_setting('bp_get_cars_settings_group', 'bp_get_cars_selector_pagination', [
+                'type' => 'string',
+                'sanitize_callback' => 'sanitize_text_field',
+                'default' => 'div.pagination-container a.pagination-page',
+            ]);
+            register_setting('bp_get_cars_settings_group', 'bp_get_cars_debug_mode', [
+                'type' => 'boolean',
+                'sanitize_callback' => 'rest_sanitize_boolean',
+                'default' => false,
+            ]);
+            register_setting('bp_get_cars_settings_group', 'bp_get_cars_batch_size', [
+                'type' => 'integer',
+                'sanitize_callback' => 'absint',
+                'default' => 5,
+            ]);
+            register_setting('bp_get_cars_settings_group', 'bp_get_cars_retry_count', [
+                'type' => 'integer',
+                'sanitize_callback' => 'absint',
+                'default' => 2,
+            ]);
+            register_setting('bp_get_cars_settings_group', 'bp_get_cars_retry_delay', [
+                'type' => 'integer',
+                'sanitize_callback' => 'absint',
+                'default' => 1,
+            ]);
+        }
+
+        public function settings_page()
+        {
+            if (! current_user_can('manage_options')) {
+                return;
+            }
+            require_once(plugin_dir_path(__FILE__) . 'admin/bp-get-cars-settings-page.php');
+            ekenbil_car_listing_settings_page($this);
+        }
+
+        public function update_notice()
+        {
+            global $pagenow, $post_type;
+            if ($pagenow === 'edit.php' && $post_type === BP_GET_CARS_POST_TYPE && current_user_can('edit_posts')) {
+                echo '
+                <div id="bp-get-cars-notice-box" class="notice notice-info" style="padding-bottom:20px;">
+                    <div id="bp-get-cars-update-status" style="margin-top:10px;"></div>
+                </div>';
+            }
+        }
+
+        public function update_car_listing_page()
+        {
+            if (! current_user_can('edit_posts')) {
+                wp_die(esc_html__('You do not have sufficient permissions to access this page.', 'bp-get-cars'));
+            }
+            $batch_size = get_option('bp_get_cars_batch_size', 5);
+            echo '<div class="wrap"><h1>' . esc_html__('Uppdatera Bil Lista', 'bp-get-cars') . '</h1>';
+            echo '<button id="bp-get-cars-update-btn" class="button button-primary">' . esc_html__('Starta Uppdatering', 'bp-get-cars') . '</button>';
+            echo '<input type="hidden" id="bp_get_cars_batch_size" value="' . esc_attr($batch_size) . '" />';
+            echo '<div id="bp-get-cars-update-status"></div>';
+        }
+
+        public function clean_outdated($uuids)
+        {
+            $args = [
+                'post_type'   => BP_GET_CARS_POST_TYPE,
+                'numberposts' => -1,
+                'fields'      => 'ids',
+                'exclude'     => $uuids
+            ];
+            $posts_to_delete = get_posts($args);
+            if (! empty($posts_to_delete)) {
+                foreach ($posts_to_delete as $post_id) {
+                    wp_delete_post($post_id, true);
+                }
+                return count($posts_to_delete) . esc_html__(' inlägg har tagits bort som är inaktuella.', 'bp-get-cars');
+            } else {
+                return esc_html__('Inga inlägg att ta bort som är inaktuella.', 'bp-get-cars');
+            }
+        }
+
+        public function is_duplicate($guid)
+        {
+            $duplicate = new WP_Query(['post_type' => BP_GET_CARS_POST_TYPE, 'meta_key' => 'uid', 'meta_value' => $guid]);
+            $post = end($duplicate->posts);
+            return $duplicate->post_count > 0 ? $post->ID : false;
+        }
+
+        public function success_message($title)
+        {
+            return '<div id="message" class="updated notice is-dismissible"><p>' . esc_html($title) . ' ' . esc_html__('har tillagts.', 'bp-get-cars') . '</p><button type="button" class="notice-dismiss"><span class="screen-reader-text">' . esc_html__('Avfärda denna notis.', 'bp-get-cars') . '</span></button></div>';
+        }
+
+        public function error_message($title)
+        {
+            return '<div id="message" class="updated notice notice-error is-dismissible"><p>' . esc_html($title) . ' ' . esc_html__('kunde inte läggas till.', 'bp-get-cars') . '</p><button type="button" class="notice-dismiss"><span class="screen-reader-text">' . esc_html__('Avfärda denna notis.', 'bp-get-cars') . '</span></button></div>';
+        }
+
+        public function create_listing($car)
+        {
+            $postarg = [
+                'post_type'   => BP_GET_CARS_POST_TYPE,
+                'post_title'  => sanitize_text_field($car->title),
+                'post_status' => 'publish',
+                'post_author' => 1,
+                'guid'        => $car->guid,
+                'meta_input'  => [
+                    'uid'                      => sanitize_text_field($car->guid),
+                    'vehica_carfax'            => esc_url($car->carfax),
+                    'vehica_currency_6656_2316' => sanitize_text_field($car->price)
+                ]
+            ];
+            $postid = wp_insert_post($postarg);
+            if (is_wp_error($postid)) {
+                $this->logger->log_error('Fel vid skapande av bilannons: ' . $postid->get_error_message());
+                return false;
+            }
+            $this->update_details($postid, $car->details);
+            wp_set_object_terms($postid, $car->features, 'vehica_6670');
+            wp_set_object_terms($postid, 'Begagnad', 'vehica_6654');
+            if (! empty($car->additional['Färg'])) {
+                wp_set_object_terms($postid, sanitize_text_field($car->additional['Färg']), 'vehica_6666');
+            }
+            $gids = $this->upload_images($car->images, $postid, $car->title);
+            if (! empty($gids) && count($gids) > 1) {
+                update_post_meta($postid, 'vehica_6673', implode(',', $gids));
+            }
+            return $postid;
+        }
+
+        public function update_details($postid, $details)
+        {
+            foreach ($details as $key => $value) {
+                if ($value[1] === 'taxonomy') {
+                    wp_set_object_terms($postid, [$value[0]], $key);
+                } else {
+                    update_post_meta($postid, sanitize_key($key), sanitize_text_field($value[0]));
+                }
+            }
+        }
+
+        public function upload_images($images, $postid, $title)
+        {
+            $gids = [];
+            $i = 0;
+            if (! function_exists('download_url')) {
+                require_once(ABSPATH . 'wp-admin/includes/file.php');
+            }
+            if (! function_exists('media_handle_sideload')) {
+                require_once(ABSPATH . 'wp-admin/includes/media.php');
+            }
+            if (! function_exists('wp_read_image_metadata')) {
+                require_once(ABSPATH . 'wp-admin/includes/image.php');
+            }
+            foreach ($images as $img) {
+                $tmp = download_url(esc_url($img));
+                if (is_wp_error($tmp)) {
+                    $this->logger->log_error("Fel vid nedladdning av bild $img: " . $tmp->get_error_message());
+                    continue;
+                }
+                $filename = sanitize_title($title) . '-' . $i . '.jpg';
+                $attachment = [
+                    'name'     => $filename,
+                    'tmp_name' => $tmp
+                ];
+                $attachid = media_handle_sideload($attachment, $postid, $title);
+                if (is_wp_error($attachid)) {
+                    $this->logger->log_error("Fel vid uppladdning av bild $filename: " . $attachid->get_error_message());
+                    continue;
+                }
+                $gids[] = $attachid;
+                if ($i === 0) {
+                    set_post_thumbnail($postid, $attachid);
+                }
+                $i++;
+            }
+            return $gids;
+        }
+
+        public function clean_number($number)
+        {
+            require_once(plugin_dir_path(__FILE__) . 'includes/bp-get-cars-helpers.php');
+            return bp_get_cars_clean_number($number);
+        }
+
+        public function clean_text($text)
+        {
+            require_once(plugin_dir_path(__FILE__) . 'includes/bp-get-cars-helpers.php');
+            return bp_get_cars_clean_text($text);
+        }
+
+        public function admin_enqueue_scripts($hook)
+        {
+            // Always enqueue on the car listing batch update page and the main edit page
+            $is_edit = $hook === 'edit.php' && isset($_GET['post_type']) && $_GET['post_type'] === BP_GET_CARS_POST_TYPE;
+            $is_batch = $hook === 'vehica_car_page_carlisting-api';
+            if ($is_edit || $is_batch) {
+                wp_enqueue_script('bp-get-cars-admin', plugin_dir_url(__FILE__) . 'assets/js/bp-get-cars-admin.js', ['jquery'], null, true);
+                wp_localize_script('bp-get-cars-admin', 'BPGetCarsAjax', [
+                    'ajax_url' => admin_url('admin-ajax.php'),
+                    'nonce'    => wp_create_nonce('bp_get_cars_update_nonce'),
+                    'batch_size' => get_option('bp_get_cars_batch_size', 5)
+                ]);
+            }
+        }
+
+        public function ajax_update_car_listing()
+        {
+            $this->logger->log_error('Start updating car listing');
+            check_ajax_referer('bp_get_cars_update_nonce', 'nonce');
+            $this->logger->log_error('Nonce verified');
+            $offset = isset($_POST['offset']) ? intval($_POST['offset']) : 0;
+            $limit = get_option('bp_get_cars_batch_size', 5);
+            $session_id = isset($_POST['session_id']) ? sanitize_text_field($_POST['session_id']) : null;
+            $this->logger->log_error('Processing batch update, session_id=' . ($session_id ?: 'none'));
+            $result = $this->scraper->update_car_listing_batch($offset, $limit, [
+                'skip_existing' => true
+            ], $session_id);
+            if (isset($result['error'])) {
+                $this->logger->log_error('Error during batch update: ' . $result['error']);
+                wp_send_json_error(['error' => $result['error']]);
+            } else {
+                $this->logger->log_error('Batch update completed successfully');
+            }
+            // If this is the last batch and all_ids is present, clean outdated posts
+            if (isset($result['all_ids']) && is_array($result['all_ids'])) {
+                $this->clean_outdated($result['all_ids']);
+            }
+            wp_send_json_success($result);
+        }
+
+        public function run_cron_batch_update()
+        {
+            $this->logger->log_error('Start cron batch update');
+            $offset = 0;
+            $limit = get_option('bp_get_cars_batch_size', 5);
+            $session_id = uniqid('bp_cars_cron_', true);
+            $all_ids = [];
+            do {
+                $result = $this->scraper->update_car_listing_batch($offset, $limit, ['skip_existing' => false], $session_id);
+                if (isset($result['results'])) {
+                    foreach ($result['results'] as $item) {
+                        if (!empty($item['id'])) {
+                            $all_ids[] = $item['id'];
+                        }
+                    }
+                }
+                $offset = isset($result['next_offset']) ? $result['next_offset'] : ($offset + $limit);
+                // If this is the last batch and all_ids is present, use it for cleanup
+                if (isset($result['all_ids']) && is_array($result['all_ids'])) {
+                    $all_ids = $result['all_ids'];
+                }
+            } while (!empty($result['has_more']) && $result['has_more']);
+            // Clean up outdated posts
+            $this->clean_outdated($all_ids);
+            $this->logger->log_error('Cron batch update finished');
+        }
+    }
+}
+
+// Initialize the plugin
+new BP_Get_Cars();
