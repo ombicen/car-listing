@@ -5,7 +5,7 @@
  * Plugin URI:        https://ekenbil.se/
  * Description:       Professional car inventory management and listing plugin for WordPress. Easily import, update, and display car listings from external sources with advanced scraping, error logging, and admin configuration.
  * Author:            Ekenbil AB
- * Version:           1.0.0
+ * Version:           1.0.1
  * Author URI:        https://ekenbil.se/
  * Text Domain:       bp-get-cars
  */
