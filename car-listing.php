@@ -322,6 +322,7 @@ if (! class_exists('BP_Get_Cars')) {
                     'nonce'    => wp_create_nonce('bp_get_cars_update_nonce'),
                     'batch_size' => get_option('bp_get_cars_batch_size', 5)
                 ]);
+                wp_enqueue_style('bp-get-cars-style', plugin_dir_url(__FILE__) . 'assets/css/style.css', [], null);
             }
         }
 
@@ -343,9 +344,12 @@ if (! class_exists('BP_Get_Cars')) {
             } else {
                 $this->logger->log_error('Batch update completed successfully');
             }
+
             // If this is the last batch and all_ids is present, clean outdated posts
             if (isset($result['all_ids']) && is_array($result['all_ids'])) {
+                $this->logger->log_error('Cleaning outdated posts: ' . implode(', ', $result['all_ids']));
                 $this->clean_outdated($result['all_ids']);
+                $this->logger->log_error('Outdated posts cleaned');
             }
             wp_send_json_success($result);
         }

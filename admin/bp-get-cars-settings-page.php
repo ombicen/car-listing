@@ -19,6 +19,7 @@ function ekenbil_car_listing_settings_page($main)
     $debug_mode = get_option('bp_get_cars_debug_mode', false);
     $batch_size = get_option('bp_get_cars_batch_size', 5);
 ?>
+
     <div class="wrap">
         <h1><?php esc_html_e('Car Listing Settings', 'bp-get-cars'); ?></h1>
         <form method="post" action="options.php">
@@ -75,17 +76,25 @@ function ekenbil_car_listing_settings_page($main)
                     </td>
                 </tr>
                 <tr>
-                    <th scope="row"><label for="bp_get_cars_retry_count"><?php esc_html_e('Retry Count for Failed Car Pages', 'bp-get-cars'); ?></label></th>
+                    <th scope="row"><label
+                            for="bp_get_cars_retry_count"><?php esc_html_e('Retry Count for Failed Car Pages', 'bp-get-cars'); ?></label>
+                    </th>
                     <td><input name="bp_get_cars_retry_count" type="number" id="bp_get_cars_retry_count" min="0" max="10"
-                            value="<?php echo esc_attr(get_option('bp_get_cars_retry_count', 2)); ?>" class="small-text" required />
-                        <span class="description"><?php esc_html_e('Number of times to retry fetching a car page before skipping (0 = no retry).', 'bp-get-cars'); ?></span>
+                            value="<?php echo esc_attr(get_option('bp_get_cars_retry_count', 2)); ?>" class="small-text"
+                            required />
+                        <span
+                            class="description"><?php esc_html_e('Number of times to retry fetching a car page before skipping (0 = no retry).', 'bp-get-cars'); ?></span>
                     </td>
                 </tr>
                 <tr>
-                    <th scope="row"><label for="bp_get_cars_retry_delay"><?php esc_html_e('Delay Between Retries (seconds)', 'bp-get-cars'); ?></label></th>
+                    <th scope="row"><label
+                            for="bp_get_cars_retry_delay"><?php esc_html_e('Delay Between Retries (seconds)', 'bp-get-cars'); ?></label>
+                    </th>
                     <td><input name="bp_get_cars_retry_delay" type="number" id="bp_get_cars_retry_delay" min="0" max="30"
-                            value="<?php echo esc_attr(get_option('bp_get_cars_retry_delay', 1)); ?>" class="small-text" required />
-                        <span class="description"><?php esc_html_e('Seconds to wait between retry attempts for failed car pages.', 'bp-get-cars'); ?></span>
+                            value="<?php echo esc_attr(get_option('bp_get_cars_retry_delay', 1)); ?>" class="small-text"
+                            required />
+                        <span
+                            class="description"><?php esc_html_e('Seconds to wait between retry attempts for failed car pages.', 'bp-get-cars'); ?></span>
                     </td>
                 </tr>
             </table>

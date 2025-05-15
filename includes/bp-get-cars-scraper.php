@@ -27,6 +27,7 @@ class BP_Get_Cars_Scraper
         $storePath = get_option('bp_get_cars_store', '/handlare/ekenbil-ab-9951');
         $store = $baseUrl . $storePath;
         $mainBaseUrl = $baseUrl;
+        $temporarily_failed_ids = [];
         $selector_car_links = sanitize_text_field(get_option('bp_get_cars_selector_car_links', 'ul.result-list li .uk-width-1-1 .car-list-header a'));
         $selector_pagination = sanitize_text_field(get_option('bp_get_cars_selector_pagination', 'div.pagination-container a.pagination-page'));
 
@@ -39,9 +40,23 @@ class BP_Get_Cars_Scraper
         $all_links = get_transient($transient_key);
         if ($all_links === false) {
             $this->log('DEBUG: No cached links for session, scraping store page: ' . $store);
-            $html = file_get_html($store);
+            $retry_count = (int) get_option('bp_get_cars_retry_count', 2);
+            $retry_delay = (int) get_option('bp_get_cars_retry_delay', 1);
+
+
+            // Add retries and delays to getting the store HTML
+            $html = false;
+            $attempts = 0;
+            while ($attempts <= $retry_count && ! $html) {
+                $html = @file_get_html($store);
+                if (! $html) {
+                    $this->log("Kunde inte hämta HTML från $store (försök " . ($attempts + 1) . ")");
+                    $attempts++;
+                    if ($attempts <= $retry_count && $retry_delay > 0) sleep($retry_delay);
+                }
+            }
             if (! $html) {
-                $this->log("Kunde inte hämta HTML från $store");
+                $this->log("Kunde inte hämta HTML från $store efter $retry_count försök");
                 return ['error' => 'Kunde inte hämta HTML från bilhandlaren.'];
             }
             $pages = $html->find($selector_pagination);
@@ -84,10 +99,6 @@ class BP_Get_Cars_Scraper
         if ($all_processed_ids === false) {
             $all_processed_ids = [];
         }
-
-        $retry_count = (int) get_option('bp_get_cars_retry_count', 2);
-        $retry_delay = (int) get_option('bp_get_cars_retry_delay', 1);
-        $temporarily_failed_ids = [];
 
         foreach ($batch as $carHref) {
             $this->log('DEBUG: Processing carHref: ' . $carHref);
@@ -145,6 +156,7 @@ class BP_Get_Cars_Scraper
         if (! $has_more) {
             delete_transient($transient_key);
             $this->log('DEBUG: Deleted transient for session_id: ' . $session_id);
+
             // Return all processed IDs for cleanup, including temporarily failed
             $all_ids_final = array_unique(array_merge($all_processed_ids, $temporarily_failed_ids));
             delete_transient($ids_transient_key);

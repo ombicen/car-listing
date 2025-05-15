@@ -1,0 +1,14 @@
+div#bp-get-cars-update-status {
+    margin-top: 10px;
+    max-height: 20px;
+    overflow-y: scroll;
+
+    &:empty {
+        display: none;
+    }
+
+    & p {
+        margin: 0;
+        padding: 0;
+    }
+}

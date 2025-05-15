@@ -34,7 +34,7 @@
       const status = document.getElementById("bp-get-cars-update-status");
       if (status) {
         status.insertAdjacentHTML("beforeend", html);
-        status.scrollIntoView({ behavior: "smooth", block: "start" });
+        status.scrollTo({ top: status.scrollHeight, behavior: "smooth" });
       }
     }
 
@@ -45,7 +45,7 @@
       const status = document.getElementById("bp-get-cars-update-status");
       if (status) {
         status.innerHTML = html;
-        status.scrollIntoView({ behavior: "smooth", block: "start" });
+        status.scrollTo({ top: status.scrollHeight, behavior: "smooth" });
       }
     }
 
