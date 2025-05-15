@@ -12,3 +12,9 @@ div#bp-get-cars-update-status {
         padding: 0;
     }
 }
+div#bp-get-cars-notice-box{
+    display: none;
+    &:has(p){
+        display: block;
+    }
+}

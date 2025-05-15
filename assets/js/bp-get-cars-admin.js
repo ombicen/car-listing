@@ -7,6 +7,8 @@
  */
 
 (function () {
+  const { __ } = window.wp.i18n || { __: (s) => s };
+
   document.addEventListener("DOMContentLoaded", function () {
     let offset = 0;
     let running = false;
@@ -65,7 +67,7 @@
         btn = document.createElement("a");
         btn.id = "bp-get-cars-update-btn";
         btn.className = "page-title-action";
-        btn.textContent = "Uppdatera Lista";
+        btn.textContent = __("Update List", "bp-get-cars");
         pageTitleAction.insertAdjacentElement("afterend", btn);
       }
       return btn;
@@ -74,32 +76,35 @@
     /**
      * Handles clicks on the update button
      */
-    function handleClick(event) {
+    async function handleClick(event) {
       if (running) return;
 
       running = true;
       offset = 0;
       sessionId = null; // Reset session on new import
 
-      resetStatus("<p>Startar uppdatering...</p>");
+      resetStatus(`<p>${__("Starting update...", "bp-get-cars")}</p>`);
 
-      btn.textContent = "Uppdaterar...";
+      btn.textContent = __("Updating...", "bp-get-cars");
       btn.setAttribute("disabled", "disabled");
 
-      runBatch();
+      await runBatch();
     }
 
     /**
      * Main batch update logic
      */
-    function runBatch() {
+    async function runBatch() {
       const batchSize = getBatchSize();
 
       if (typeof BPGetCarsAjax === "undefined") {
         appendStatus(
-          "<p style='color:red;'>Konfigurationsobjektet BPGetCarsAjax saknas.</p>"
+          `<p style='color:red;'>${__(
+            "The BPGetCarsAjax config object is missing.",
+            "bp-get-cars"
+          )}</p>`
         );
-        btn.textContent = "Uppdatera Lista";
+        btn.textContent = __("Update List", "bp-get-cars");
         btn.removeAttribute("disabled");
         running = false;
         return;
@@ -115,57 +120,74 @@
         params.session_id = sessionId;
       }
 
-      fetch(BPGetCarsAjax.ajax_url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-        },
-        body: new URLSearchParams(params),
-      })
-        .then((response) => response.json())
-        .then((response) => {
-          // Defensive: check for valid JSON structure
-          if (!response || typeof response !== "object") {
-            handleError("Ogiltigt JSON-svar från servern.");
-            return;
-          }
-          if (response.success && response.data) {
-            const data = response.data;
-            if (!sessionId && data.session_id) {
-              sessionId = data.session_id;
-            }
-            total = data.total;
-            let done = offset + batchSize;
-            if (done > total) done = total;
-            appendStatus(`<p>Bearbetade ${done} av ${total} bilar...</p>`);
-            offset = data.next_offset;
-            if (data.has_more) {
-              runBatch();
-            } else {
-              appendStatus("<p style='color:green;'>Färdig!</p>");
-              btn.textContent = "Uppdatera Lista";
-              btn.removeAttribute("disabled");
-              running = false;
-            }
-          } else {
-            let errorMsg = "Fel vid uppdatering.";
-            if (response.data && response.data.error) {
-              errorMsg += " " + response.data.error;
-            }
-            handleError(errorMsg);
-          }
-        })
-        .catch((error) => {
-          handleError(error);
+      try {
+        const response = await fetch(BPGetCarsAjax.ajax_url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+          },
+          body: new URLSearchParams(params),
         });
+        if (!response.ok) {
+          throw new Error(
+            __("HTTP error: ", "bp-get-cars") +
+              response.status +
+              " " +
+              response.statusText
+          );
+        }
+        const data = await response.json();
+        if (!data || typeof data !== "object") {
+          handleError(__("Invalid JSON response from server.", "bp-get-cars"));
+          return;
+        }
+        if (data.success && data.data) {
+          const d = data.data;
+          if (!sessionId && d.session_id) {
+            sessionId = d.session_id;
+          }
+          total = d.total;
+          let done = offset + batchSize;
+          if (done > total) done = total;
+          appendStatus(`<p>Processed ${done} of ${total} cars...</p>`);
+          offset = d.next_offset;
+          if (d.has_more) {
+            await runBatch();
+          } else {
+            appendStatus(
+              `<p style='color:green;'>${__("Done!", "bp-get-cars")}</p>`
+            );
+            btn.textContent = __("Update List", "bp-get-cars");
+            btn.removeAttribute("disabled");
+            running = false;
+          }
+        } else if (data.data && data.data.error) {
+          // Handle backend-reported batch item error
+          handleError(data.data.error);
+        } else {
+          let errorMsg = __("Error during update.", "bp-get-cars");
+          if (data.data && data.data.error) {
+            errorMsg += " " + data.data.error;
+          }
+          handleError(errorMsg);
+        }
+      } catch (error) {
+        handleError(error);
+      }
     }
 
     /**
      * Handles errors properly, updating the UI and re-enabling the button
      */
     function handleError(error) {
-      appendStatus(`<p style='color:red;'>Fel vid uppdatering: ${error}</p>`);
-      btn.textContent = "Uppdatera Lista";
+      const msg = error && error.message ? error.message : String(error);
+      appendStatus(
+        `<p style='color:red;'>${__(
+          "Error during update:",
+          "bp-get-cars"
+        )} ${msg}</p>`
+      );
+      btn.textContent = __("Update List", "bp-get-cars");
       btn.removeAttribute("disabled");
       running = false;
     }
@@ -174,7 +196,10 @@
     let btn = getOrCreateUpdateButton();
     if (!btn) {
       appendStatus(
-        "<p style='color:red;'>Kunde inte hitta eller skapa uppdateringsknappen för bilar.</p>"
+        `<p style='color:red;'>${__(
+          "Could not find or create the car update button.",
+          "bp-get-cars"
+        )}</p>`
       );
       return;
     }
