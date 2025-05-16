@@ -4,15 +4,18 @@ if (!defined('ABSPATH')) exit;
 
 function ekenbil_car_listing_settings_page($main)
 {
-    if (isset($_POST['bp_get_cars_clear_log']) && current_user_can('manage_options')) {
-        $main->logger->clear_log();
-        // Refresh to avoid resubmission
-        echo '<script>window.location = window.location.href.replace(/&bp_get_cars_clear_log=1/, "");</script>';
+    // Use public getter for logger
+    $logger = method_exists($main, 'get_logger') ? $main->get_logger() : null;
+    if (isset($_POST['bp_get_cars_clear_log']) && current_user_can('manage_options') && $logger) {
+        $logger->clearLog();
+        // Use JS redirect for compatibility with WordPress admin
+        echo '<script>window.location = window.location.href.replace(/([&?])bp_get_cars_clear_log=1(&|$)/, "$1");</script>';
         exit;
     }
     $log_content = '';
-    if (file_exists($main->error_log_file)) {
-        $log_content = file_get_contents($main->error_log_file);
+    $error_log_file = method_exists($main, 'get_error_log_file') ? $main->get_error_log_file() : null;
+    if ($error_log_file && file_exists($error_log_file)) {
+        $log_content = file_get_contents($error_log_file);
     }
     $selector_car_links = get_option('bp_get_cars_selector_car_links', 'ul.result-list li .uk-width-1-1 .car-list-header a');
     $selector_pagination = get_option('bp_get_cars_selector_pagination', 'div.pagination-container a.pagination-page');
@@ -103,8 +106,7 @@ function ekenbil_car_listing_settings_page($main)
         <h2><?php esc_html_e('Plugin Debug Log', 'bp-get-cars'); ?></h2>
         <div
             style="max-height:300px;overflow:auto;background:#fff;border:1px solid #ccc;padding:10px;font-family:monospace;white-space:pre-wrap;">
-            <?php echo esc_html($log_content ? $log_content : __('No errors logged.', 'bp-get-cars')); ?>
-        </div>
+            <?php echo esc_html($log_content ? $log_content : __('No errors logged.', 'bp-get-cars')); ?></div>
         <form method="post" style="margin-top:10px;">
             <input type="hidden" name="bp_get_cars_clear_log" value="1" />
             <?php submit_button(__('Clear Log', 'bp-get-cars'), 'secondary', 'submit', false); ?>

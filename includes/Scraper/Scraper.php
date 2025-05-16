@@ -31,6 +31,8 @@ class Scraper implements ScraperInterface
         $temporarily_failed_ids = [];
         $selector_car_links = sanitize_text_field(get_option('bp_get_cars_selector_car_links', 'ul.result-list li .uk-width-1-1 .car-list-header a'));
         $selector_pagination = sanitize_text_field(get_option('bp_get_cars_selector_pagination', 'div.pagination-container a.pagination-page'));
+        $retry_count = (int) get_option('bp_get_cars_retry_count', 2);
+        $retry_delay = (int) get_option('bp_get_cars_retry_delay', 1);
 
         if (!$sessionId) {
             $sessionId = uniqid('bp_cars_', true);
@@ -40,8 +42,7 @@ class Scraper implements ScraperInterface
         $all_links = get_transient($transient_key);
         if ($all_links === false) {
             $this->logger->logError('No cached links for session, scraping store page: ' . $store);
-            $retry_count = (int) get_option('bp_get_cars_retry_count', 2);
-            $retry_delay = (int) get_option('bp_get_cars_retry_delay', 1);
+
             $html = false;
             $attempts = 0;
             while ($attempts <= $retry_count && ! $html) {
@@ -94,6 +95,7 @@ class Scraper implements ScraperInterface
         if ($all_processed_ids === false) {
             $all_processed_ids = [];
         }
+
         foreach ($batch as $carHref) {
             $this->logger->logError('Processing carHref: ' . $carHref);
             if ($skip_existing && ($id = $this->repository->isDuplicate($carHref)) !== false) {
@@ -120,18 +122,21 @@ class Scraper implements ScraperInterface
                 $results[] = ['guid' => $carHref, 'status' => 'error', 'retries' => $retry_count];
                 continue;
             }
-            $car = (object) [];
-            $car->guid = $carHref;
-            $titleNode = $carPage->find('.vehicle-detail-title', 0);
-            $car->title = \Ekenbil\CarListing\Helpers\Helpers::cleanText($titleNode ? $titleNode->plaintext : '');
-            $priceNode = $carPage->find('#vehicle-details .vehicle-detail-price .car-price-details', 0);
-            $car->price = \Ekenbil\CarListing\Helpers\Helpers::cleanNumber($priceNode ? $priceNode->plaintext : '');
-            $car->details = $this->extractDetails($carPage, $map);
-            $carfaxNode = $carPage->find('#extended-carfax-details .extended-carfax-details-headline a', 0);
-            $car->carfax = $carfaxNode ? $carfaxNode->href : '';
-            $car->additional = $this->extractAdditional($carPage);
-            $car->images = $this->extractImages($carPage);
-            $car->features = $this->extractFeatures($carPage);
+            // Defensive: ensure $carPage is a valid object before using ->find
+            if (!is_object($carPage)) {
+                $this->logger->logError('carPage is not a valid object for carHref: ' . $carHref);
+                $results[] = ['guid' => $carHref, 'status' => 'error', 'reason' => 'carPage not object'];
+                continue;
+            }
+            $car = $this->parser->parseCarPage($carPage, $carHref, $map);
+            // Check for duplicate by GUID before creating/updating
+            $existingId = $this->repository->isDuplicate($carHref);
+            if ($existingId !== false) {
+                $this->logger->logError('Duplicate detected for carHref: ' . $carHref . ' (ID: ' . $existingId . ')');
+                $results[] = ['guid' => $carHref, 'status' => 'duplicate', 'id' => $existingId];
+                $all_processed_ids[] = $existingId;
+                continue;
+            }
             $this->logger->logError('Creating/updating listing for car: ' . $car->title);
             if ($id = $this->repository->createOrUpdateListing($car)) {
                 $this->logger->logError('Successfully created/updated car: ' . $car->title . ' (ID: ' . $id . ')');
@@ -180,16 +185,21 @@ class Scraper implements ScraperInterface
     // Helper extraction methods (renamed for PSR-12)
     private function extractDetails($carPage, $map)
     {
-        $details = (object) [];
-        $detailsHtml = $carPage->find('div.vehicle-detail-headline .object-info-box dl div');
-        foreach ($detailsHtml as $carFeature) {
-            $dtNode = $carFeature->find('dt', 0);
-            $ddNode = $carFeature->find('dd', 0);
-            $keyFeature = $dtNode ? $dtNode->plaintext : '';
-            $featureKey = $map[$keyFeature] ?? null;
-            if ($featureKey && $ddNode) {
-                $value = \Ekenbil\CarListing\Helpers\Helpers::cleanNumber($ddNode->plaintext);
-                $details->{$featureKey[0]} = [$value, $featureKey[1]];
+        $details = [];
+        $detailsHtml = $carPage->find('div.vehicle-detail-headline .object-info-box dl');
+        if ($detailsHtml && count($detailsHtml) > 0) {
+            $dtNodes = $detailsHtml[0]->find('dt');
+            $ddNodes = $detailsHtml[0]->find('dd');
+            foreach ($dtNodes as $i => $dtNode) {
+                $keyFeature = trim($dtNode->plaintext);
+                $featureKey = $map[$keyFeature] ?? null;
+                $ddNode = $ddNodes[$i] ?? null;
+                if ($featureKey && $ddNode) {
+                    $value = $featureKey[1] === 'number'
+                        ? \Ekenbil\CarListing\Helpers\Helpers::cleanNumber($ddNode->plaintext)
+                        : \Ekenbil\CarListing\Helpers\Helpers::cleanText($ddNode->plaintext);
+                    $details[$featureKey[0]] = [$value, $featureKey[1]];
+                }
             }
         }
         return $details;

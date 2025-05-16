@@ -84,7 +84,7 @@ final class Plugin
      * For PSR-4 compatibility prevent cloning or unserializing.
      */
     private function __clone() {}
-    private function __wakeup() {}
+    public function __wakeup() {}
 
     /*** ====== SCHEDULING ====== ***/
     public function schedule_daily_update(): void
@@ -466,6 +466,24 @@ final class Plugin
         // Clean up outdated posts
         $this->clean_outdated($all_ids);
         $this->logger->log_error('Cron batch update finished');
+    }
+
+    /**
+     * Return the error log file path for admin/settings UI.
+     * @return string
+     */
+    public function get_error_log_file(): string
+    {
+        return $this->logger->getErrorLogFile();
+    }
+
+    /**
+     * Public getter for logger for settings page and admin UI.
+     * @return Logger
+     */
+    public function get_logger(): Logger
+    {
+        return $this->logger;
     }
 }
 

@@ -53,7 +53,9 @@ class CarRepository implements CarRepositoryInterface
             $this->logger->logError('Error creating car listing: ' . $postid->get_error_message());
             return false;
         }
-        $this->updateDetails($postid, $car->details);
+        // Defensive: ensure $car->details is always an array
+        $details = is_array($car->details) ? $car->details : (array) $car->details;
+        $this->updateDetails($postid, $details);
         $result = wp_set_object_terms($postid, $car->features, 'vehica_6670');
         if (is_wp_error($result)) {
             $this->logger->logError('Error assigning features: ' . $result->get_error_message());

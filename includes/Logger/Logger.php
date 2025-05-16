@@ -39,4 +39,13 @@ class Logger
     {
         file_put_contents($this->errorLogFile, '');
     }
+
+    /**
+     * Expose the error log file path for admin/settings UI.
+     * @return string
+     */
+    public function getErrorLogFile(): string
+    {
+        return $this->errorLogFile;
+    }
 }
