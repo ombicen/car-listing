@@ -48,4 +48,16 @@ class Logger
     {
         return $this->errorLogFile;
     }
+
+    // Add a static logger for use in static/utility contexts
+    public static function staticLog(string $message): void
+    {
+        if (!get_option('bp_get_cars_debug_mode', false)) {
+            return;
+        }
+        $date = date('Y-m-d H:i:s');
+        $entry = "[STATIC] [$date] $message\n";
+        $logFile = plugin_dir_path(__DIR__) . '../bp-get-cars-error.log';
+        file_put_contents($logFile, $entry, FILE_APPEND | LOCK_EX);
+    }
 }

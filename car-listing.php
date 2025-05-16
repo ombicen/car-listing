@@ -63,13 +63,18 @@ final class Plugin
     private function __construct()
     {
         $this->logger = new Logger(plugin_dir_path(__FILE__) . 'bp-get-cars-error.log');
+        $this->logger->logError('[Plugin] Constructed main plugin instance');
         $this->repository = new CarRepository($this->logger);
         $this->scraper = new Scraper($this->logger, new CarParser(), $this->repository);
+        $this->logger->logError('[Plugin] Scraper, Parser, Repository initialized');
 
         // Hooks
         register_activation_hook(__FILE__, [$this, 'schedule_daily_update']);
+        $this->logger->logError('[Plugin] Registered activation hook');
         register_deactivation_hook(__FILE__, [$this, 'clear_daily_update']);
+        $this->logger->logError('[Plugin] Registered deactivation hook');
         add_action('bp_get_cars_update_event', [$this, 'run_cron_batch_update']);
+        $this->logger->logError('[Plugin] Registered cron update event');
 
         add_action('admin_menu', [$this, 'admin_menu']);
         add_action('admin_init', [$this, 'register_settings']);
@@ -78,6 +83,7 @@ final class Plugin
         add_action('wp_ajax_bp_get_cars_update', [$this, 'ajax_update_car_listing']);
         add_action('wp_ajax_bp_get_cars_update_batch', [$this, 'ajax_update_car_listing']);
         add_filter('cron_schedules', [$this, 'add_cron_interval']);
+        $this->logger->logError('[Plugin] Registered all admin and AJAX hooks');
     }
 
     /**
@@ -89,6 +95,7 @@ final class Plugin
     /*** ====== SCHEDULING ====== ***/
     public function schedule_daily_update(): void
     {
+        $this->logger->logError('[Plugin] schedule_daily_update called');
         if (! wp_next_scheduled('bp_get_cars_update_event')) {
             wp_schedule_event(time(), 'every_2_hours', 'bp_get_cars_update_event');
         }
@@ -96,6 +103,7 @@ final class Plugin
 
     public function add_cron_interval(array $schedules): array
     {
+        $this->logger->logError('[Plugin] add_cron_interval called');
         $schedules['every_2_hours'] = [
             'interval' => 2 * HOUR_IN_SECONDS,
             'display'  => esc_html__('Every 2 Hours', self::TEXT_DOMAIN)
@@ -105,6 +113,7 @@ final class Plugin
 
     public function clear_daily_update(): void
     {
+        $this->logger->logError('[Plugin] clear_daily_update called');
         wp_clear_scheduled_hook('bp_get_cars_update_event');
     }
 
@@ -131,6 +140,7 @@ final class Plugin
 
     public function register_settings(): void
     {
+        $this->logger->logError('[Plugin] register_settings called');
         register_setting('bp_get_cars_settings_group', 'bp_get_cars_baseurl', [
             'type' => 'string',
             'sanitize_callback' => 'esc_url_raw',
@@ -175,6 +185,7 @@ final class Plugin
 
     public function settings_page(): void
     {
+        $this->logger->logError('[Plugin] settings_page called');
         if (! current_user_can('manage_options')) {
             wp_die(esc_html__('You do not have sufficient permissions.', self::TEXT_DOMAIN));
         }
@@ -184,6 +195,7 @@ final class Plugin
 
     public function update_notice(): void
     {
+        $this->logger->logError('[Plugin] update_notice called');
         global $pagenow, $post_type;
         if ($pagenow === 'edit.php' && $post_type === BP_GET_CARS_POST_TYPE && current_user_can('edit_posts')) {
             echo '<div id="bp-get-cars-notice-box" class="notice notice-info" style="padding-bottom:15px;">
@@ -194,6 +206,7 @@ final class Plugin
 
     public function update_car_listing_page(): void
     {
+        $this->logger->logError('[Plugin] update_car_listing_page called');
         if (! current_user_can('edit_posts')) {
             wp_die(esc_html__('You do not have sufficient permissions to access this page.', self::TEXT_DOMAIN));
         }
@@ -207,6 +220,7 @@ final class Plugin
     /*** ====== CORE CRUD & BATCH LOGIC ====== ***/
     public function clean_outdated(array $uuids): string
     {
+        $this->logger->logError('[Plugin] clean_outdated called with uuids: ' . json_encode($uuids));
         if (empty($uuids)) {
             return esc_html__('No outdated posts to remove.', self::TEXT_DOMAIN);
         }
@@ -260,6 +274,7 @@ final class Plugin
      */
     public function create_listing(object $car)
     {
+        $this->logger->logError('[Plugin] create_listing called for car: ' . json_encode($car));
         $author_id = get_current_user_id();
         if (!$author_id) {
             $author_id = (int) get_option('bp_get_cars_default_author', 1);
@@ -309,6 +324,7 @@ final class Plugin
      */
     public function update_details(int $postid, array $details): void
     {
+        $this->logger->logError('[Plugin] update_details called for postid: ' . $postid . ', details: ' . json_encode($details));
         foreach ($details as $key => $value) {
             if ($value[1] === 'taxonomy') {
                 wp_set_object_terms($postid, [$value[0]], $key);
@@ -378,6 +394,7 @@ final class Plugin
 
     public function admin_enqueue_scripts(string $hook): void
     {
+        $this->logger->logError('[Plugin] admin_enqueue_scripts called for hook: ' . $hook);
         $is_edit = $hook === 'edit.php' && isset($_GET['post_type']) && $_GET['post_type'] === BP_GET_CARS_POST_TYPE;
         $is_batch = $hook === 'vehica_car_page_carlisting-api';
         if ($is_edit || $is_batch) {
@@ -396,6 +413,7 @@ final class Plugin
      */
     public function ajax_update_car_listing(): void
     {
+        $this->logger->logError('[Plugin] AJAX update triggered');
         $this->logger->log_error('Start updating car listing');
         // Custom error for nonce/permissions
         if (!isset($_POST['nonce']) || !check_ajax_referer('bp_get_cars_update_nonce', 'nonce', false)) {
@@ -443,6 +461,7 @@ final class Plugin
 
     public function run_cron_batch_update(): void
     {
+        $this->logger->logError('[Plugin] Cron batch update started');
         $this->logger->log_error('Start cron batch update');
         $offset = 0;
         $limit = (int) get_option('bp_get_cars_batch_size', 5);
@@ -474,6 +493,7 @@ final class Plugin
      */
     public function get_error_log_file(): string
     {
+        $this->logger->logError('[Plugin] get_error_log_file called');
         return $this->logger->getErrorLogFile();
     }
 
@@ -483,6 +503,7 @@ final class Plugin
      */
     public function get_logger(): Logger
     {
+        $this->logger->logError('[Plugin] get_logger called');
         return $this->logger;
     }
 }

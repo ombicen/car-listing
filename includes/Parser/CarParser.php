@@ -9,6 +9,7 @@ class CarParser
     // Add parsing methods here, e.g. parse car details from HTML
     public function parseCarPage($carPage, $carHref, $map): object
     {
+        \Ekenbil\CarListing\Logger\Logger::staticLog('[CarParser] parseCarPage called for: ' . $carHref);
         $car = (object) [];
         $car->guid = $carHref;
         $titleNode = $carPage->find('.vehicle-detail-title', 0);
@@ -21,18 +22,20 @@ class CarParser
         $car->additional = $this->extractAdditional($carPage);
         $car->images = $this->extractImages($carPage);
         $car->features = $this->extractFeatures($carPage);
+        \Ekenbil\CarListing\Logger\Logger::staticLog('[CarParser] Parsed car: ' . json_encode($car));
         return $car;
     }
 
     private function extractDetails($carPage, $map)
     {
-        $details = [];
+        \Ekenbil\CarListing\Logger\Logger::staticLog('[CarParser] extractDetails called');
         $detailsHtml = $carPage->find('div.vehicle-detail-headline .object-info-box dl');
         if ($detailsHtml && count($detailsHtml) > 0) {
             $dtNodes = $detailsHtml[0]->find('dt');
             $ddNodes = $detailsHtml[0]->find('dd');
             foreach ($dtNodes as $i => $dtNode) {
-                $keyFeature = trim($dtNode->plaintext);
+
+                $keyFeature = \Ekenbil\CarListing\Helpers\Helpers::cleanText($dtNode->plaintext);
                 $featureKey = $map[$keyFeature] ?? null;
                 $ddNode = $ddNodes[$i] ?? null;
                 if ($featureKey && $ddNode) {
@@ -43,11 +46,13 @@ class CarParser
                 }
             }
         }
+        \Ekenbil\CarListing\Logger\Logger::staticLog('[CarParser] extractDetails result: ' . json_encode($details));
         return $details;
     }
 
     private function extractAdditional($carPage)
     {
+        \Ekenbil\CarListing\Logger\Logger::staticLog('[CarParser] extractAdditional called');
         $additional = [];
         $key = $value = '';
         $u = 1;
@@ -61,11 +66,13 @@ class CarParser
             }
             $u++;
         }
+        \Ekenbil\CarListing\Logger\Logger::staticLog('[CarParser] extractAdditional result: ' . json_encode($additional));
         return $additional;
     }
 
     private function extractImages($carPage)
     {
+        \Ekenbil\CarListing\Logger\Logger::staticLog('[CarParser] extractImages called');
         $images = [];
         $carImagesNodes = $carPage->find('div.main-slideshow-container > ul.uk-slideshow > li');
         foreach ($carImagesNodes as $carImages) {
@@ -74,16 +81,19 @@ class CarParser
                 $images[] = (string) $src;
             }
         }
+        \Ekenbil\CarListing\Logger\Logger::staticLog('[CarParser] extractImages result: ' . json_encode($images));
         return $images;
     }
 
     private function extractFeatures($carPage)
     {
+        \Ekenbil\CarListing\Logger\Logger::staticLog('[CarParser] extractFeatures called');
         $features = [];
         $equipmentNodes = $carPage->find('div.vehicle-detail-equipment-detail .equipment-box ul li');
         foreach ($equipmentNodes as $equipment) {
             $features[] = \Ekenbil\CarListing\Helpers\Helpers::cleanText($equipment->plaintext);
         }
+        \Ekenbil\CarListing\Logger\Logger::staticLog('[CarParser] extractFeatures result: ' . json_encode($features));
         return $features;
     }
 }
