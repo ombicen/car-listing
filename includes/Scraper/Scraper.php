@@ -40,7 +40,7 @@ final class Scraper implements ScraperInterface
     public function __construct(Logger $logger, CarParser $parser, CarRepositoryInterface $repository)
     {
         // Lazy‑load the HTML‑DOM helper once for all calls
-        require_once dirname(__DIR__, 2) . '/simple_html_dom.php';
+        require_once dirname(__DIR__) . '/simple_html_dom.php';
 
         $this->logger     = $logger;
         $this->parser     = $parser;
