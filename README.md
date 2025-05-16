@@ -67,5 +67,3 @@ Copyright (c) Ekenbil AB. All rights reserved.
 
 ---
 
-## Support
-For support or feature requests, contact [Ekenbil AB](https://ekenbil.se/).
