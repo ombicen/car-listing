@@ -7,19 +7,20 @@ namespace Ekenbil\CarListing\Scraper;
 use Ekenbil\CarListing\Logger\Logger;
 use Ekenbil\CarListing\Parser\CarParser;
 use Ekenbil\CarListing\Persistence\CarRepositoryInterface;
-use simple_html_dom; // make IDE aware (autoloaded via include below)
+use simple_html_dom;
 
 /**
  * Fetches car links from BytBil and imports them in configurable batches.
  * – Retries network calls with exponential back‑off
  * – Caches scraped link lists in WP‑transients to avoid re‑scraping during the same session
- * – Delegates all parsing & persistence to CarParser + CarRepository
+ * – Persists processed post‑IDs between batches; returns them *endast i sista batchen*.
  */
 final class Scraper implements ScraperInterface
 {
-    private const LINKS_CACHE_TTL = 1800; // 30 min
-    private const DEFAULT_RETRY_COUNT  = 2;
-    private const DEFAULT_RETRY_DELAY  = 1; // seconds
+    private const LINKS_CACHE_TTL   = 1800; // 30 min
+    private const IDS_CACHE_TTL     = 1800; // sync with links
+    private const DEFAULT_RETRY_COUNT = 2;
+    private const DEFAULT_RETRY_DELAY = 1; // seconds
 
     private Logger $logger;
     private CarParser $parser;
@@ -39,64 +40,61 @@ final class Scraper implements ScraperInterface
 
     public function __construct(Logger $logger, CarParser $parser, CarRepositoryInterface $repository)
     {
-        // Lazy‑load the HTML‑DOM helper once for all calls
-        require_once dirname(__DIR__) . '/simple_html_dom.php';
-
+        require_once dirname(__DIR__) . '/simple_html_dom.php'; // lazy load once
         $this->logger     = $logger;
         $this->parser     = $parser;
         $this->repository = $repository;
     }
 
     /**
-     * Scrape & import one batch.
-     *
-     * @param int         $offset      Zero‑based cursor in link‑array
-     * @param int         $limit       Max number of cars to process
-     * @param array       $options     [ 'skip_existing' => bool ]
-     * @param string|null $sessionId   Unique key shared across consecutive batches
+     * Process a batch of listings and persist processed IDs between calls.
+     * Returns `all_ids` *endast* när detta är sista batchen.
      *
      * @return array{results:array<array<string,mixed>>,has_more:bool,next_offset:int,total:int,session_id:string,all_ids?:array<int>}
      */
     public function updateCarListingBatch(int $offset, int $limit, array $options = [], ?string $sessionId = null): array
     {
-        // 1) ------- Resolve config -------
-        $baseUrl           = rtrim((string) get_option('bp_get_cars_baseurl', 'https://www.bytbil.com'), '/');
-        $storePath         = (string) get_option('bp_get_cars_store', '/handlare/ekenbil-ab-9951');
-        $selectorCarLinks  = (string) get_option('bp_get_cars_selector_car_links', 'ul.result-list li .uk-width-1-1 .car-list-header a');
-        $selectorPagination = (string) get_option('bp_get_cars_selector_pagination', 'div.pagination-container a.pagination-page');
-        $retryCount        = (int) get_option('bp_get_cars_retry_count', self::DEFAULT_RETRY_COUNT);
-        $retryDelay        = (int) get_option('bp_get_cars_retry_delay', self::DEFAULT_RETRY_DELAY);
-        $skipExisting      = $options['skip_existing'] ?? false;
+        // ---------- Configuration ----------
+        $baseUrl            = rtrim((string) get_option('bp_get_cars_baseurl', 'https://www.bytbil.com'), '/');
+        $storePath          = (string) get_option('bp_get_cars_store', '/handlare/ekenbil-ab-9951');
+        $selCarLinks        = (string) get_option('bp_get_cars_selector_car_links', 'ul.result-list li .uk-width-1-1 .car-list-header a');
+        $selPagination      = (string) get_option('bp_get_cars_selector_pagination', 'div.pagination-container a.pagination-page');
+        $retryCount         = (int) get_option('bp_get_cars_retry_count', self::DEFAULT_RETRY_COUNT);
+        $retryDelay         = (int) get_option('bp_get_cars_retry_delay', self::DEFAULT_RETRY_DELAY);
+        $skipExisting       = $options['skip_existing'] ?? false;
 
-        // 2) ------- Session & caching -------
-        $sessionId   ??= uniqid('bp_cars_', true);
-        $transientKey       = 'bp_get_cars_links_' . $sessionId;
-        $linkList           = get_transient($transientKey);
+        // ---------- Session & caches ----------
+        $sessionId ??= uniqid('bp_cars_', true);
+        $linksKey = 'bp_get_cars_links_' . $sessionId;
+        $idsKey   = 'bp_get_cars_ids_'   . $sessionId;
 
+        /** @var array<string>|false $linkList */
+        $linkList = get_transient($linksKey);
         if ($linkList === false) {
             $this->logger->logError("[Scraper] Cache miss – scraping dealer pages for session $sessionId");
-            $linkList = $this->scrapeAllCarLinks("{$baseUrl}{$storePath}", $selectorPagination, $selectorCarLinks, $retryCount, $retryDelay);
+            $linkList = $this->scrapeAllCarLinks("{$baseUrl}{$storePath}", $selPagination, $selCarLinks, $retryCount, $retryDelay);
             if (isset($linkList['error'])) {
-                return $linkList; // early‑return on fatal scrape error
+                return $linkList; // early failure
             }
-            set_transient($transientKey, $linkList, self::LINKS_CACHE_TTL);
+            set_transient($linksKey, $linkList, self::LINKS_CACHE_TTL);
         }
 
-        // 3) ------- Slice current batch -------
+        // Load or init processed‑IDs list (persisted between batches)
+        /** @var array<int> $processedIds */
+        $processedIds = get_transient($idsKey);
+        if ($processedIds === false) {
+            $processedIds = [];
+        }
+
+        // ---------- Current batch ----------
         $batchLinks = array_slice($linkList, $offset, $limit);
-        $this->logger->logError("[Scraper] Batch offset={$offset} limit={$limit} (" . count($batchLinks) . ' links)');
+        $results    = [];
 
-        $results           = [];
-        $processedPostIds  = [];
-
-        // 4) ------- Process each car page -------
         foreach ($batchLinks as $relUrl) {
-            $guid = $relUrl; // relative path is our GUID/uid
-            $this->logger->logError("[Scraper] Handling $guid");
-
+            $guid = $relUrl;
             if ($skipExisting && ($dupId = $this->repository->isDuplicate($guid))) {
-                $results[] = ['guid' => $guid, 'status' => 'skipped_existing', 'id' => $dupId];
-                $processedPostIds[] = $dupId;
+                $results[]    = ['guid' => $guid, 'status' => 'skipped_existing', 'id' => $dupId];
+                $processedIds[] = $dupId;
                 continue;
             }
 
@@ -106,83 +104,79 @@ final class Scraper implements ScraperInterface
                 continue;
             }
 
-            $car = $this->parser->parseCarPage($html, $guid, $this->fieldMap);
+            $car    = $this->parser->parseCarPage($html, $guid, $this->fieldMap);
             $postId = $this->repository->createOrUpdateListing($car);
 
             if ($postId) {
-                $results[] = ['guid' => $guid, 'status' => 'success', 'id' => $postId];
-                $processedPostIds[] = $postId;
+                $results[]    = ['guid' => $guid, 'status' => 'success', 'id' => $postId];
+                $processedIds[] = $postId;
             } else {
                 $results[] = ['guid' => $guid, 'status' => 'error'];
             }
         }
 
-        // 5) ------- Assemble response -------
+        // Persist updated processed‑ID list for next batch
+        set_transient($idsKey, array_unique($processedIds), self::IDS_CACHE_TTL);
+
+        // ---------- Build response ----------
         $nextOffset = $offset + $limit;
         $hasMore    = $nextOffset < count($linkList);
 
-        // Clean up when finished
-        if (! $hasMore) {
-            delete_transient($transientKey);
-        }
-
-        return [
+        // Clean up & emit all_ids only at final batch
+        $response = [
             'results'     => $results,
             'has_more'    => $hasMore,
             'next_offset' => $nextOffset,
             'total'       => count($linkList),
             'session_id'  => $sessionId,
-            'all_ids'     => $processedPostIds,
         ];
+
+        if (! $hasMore) {
+            delete_transient($linksKey);
+            delete_transient($idsKey);
+            $response['all_ids'] = $processedIds;
+        }
+
+        return $response;
     }
 
-    // ---------------------------------------------------------------------
-    // Private helpers
-    // ---------------------------------------------------------------------
+    // ------------------------------------------------------------------
+    // Helpers
+    // ------------------------------------------------------------------
 
-    /**
-     * Fetch URL with retry/back‑off. Returns null on failure.
-     */
     private function fetchWithRetry(string $url, int $maxAttempts, int $delay): ?simple_html_dom
     {
-        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+        for ($i = 1; $i <= $maxAttempts; $i++) {
             $html = @file_get_html($url);
             if ($html) {
                 return $html;
             }
-            $this->logger->logError("[Scraper] Attempt $attempt failed for $url");
+            $this->logger->logError("[Scraper] Attempt $i failed for $url");
             sleep($delay);
         }
-        $this->logger->logError("[Scraper] Permanent failure for $url after $maxAttempts attempts");
         return null;
     }
 
-    /**
-     * Scrape *all* car links for a dealer, following pagination.
-     * @return array<string>|array{error:string}
-     */
-    private function scrapeAllCarLinks(string $dealerUrl, string $paginationSelector, string $linkSelector, int $retries, int $delay): array
+    /** @return array<string>|array{error:string} */
+    private function scrapeAllCarLinks(string $dealerUrl, string $paginationSel, string $linkSel, int $retries, int $delay): array
     {
-        $firstPage = $this->fetchWithRetry($dealerUrl, $retries, $delay);
-        if ($firstPage === null) {
+        $page1 = $this->fetchWithRetry($dealerUrl, $retries, $delay);
+        if ($page1 === null) {
             return ['error' => 'Could not fetch dealer page'];
         }
 
-        $pagesTotal = max(1, count($firstPage->find($paginationSelector)));
-        $links      = [];
-
-        for ($page = 1; $page <= $pagesTotal; $page++) {
-            $pageUrl = $page === 1 ? $dealerUrl : $dealerUrl . '?Page=' . $page;
-            $html    = $page === 1 ? $firstPage : $this->fetchWithRetry($pageUrl, $retries, $delay);
-            if ($html === null) {
-                $this->logger->logError("[Scraper] Skipping unreachable page $pageUrl");
+        $pages = max(1, count($page1->find($paginationSel)));
+        $links = [];
+        for ($p = 1; $p <= $pages; $p++) {
+            $url  = $p === 1 ? $dealerUrl : $dealerUrl . '?Page=' . $p;
+            $html = $p === 1 ? $page1 : $this->fetchWithRetry($url, $retries, $delay);
+            if (! $html) {
                 continue;
             }
-            foreach ($html->find($linkSelector) as $a) {
+            foreach ($html->find($linkSel) as $a) {
                 $links[] = $a->href;
             }
         }
-        $this->logger->logError('[Scraper] Collected ' . count($links) . ' car links');
         return $links;
     }
 }
